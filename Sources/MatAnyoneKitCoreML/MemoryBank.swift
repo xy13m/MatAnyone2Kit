@@ -105,8 +105,8 @@ final class MemoryBank {
     }
 
     // ----------------------------------------------------------------- read
-    static var profile: [String: (ms: Double, calls: Int)] = [:]
-    static var profilingEnabled = false
+    nonisolated(unsafe) static var profile: [String: (ms: Double, calls: Int)] = [:]
+    nonisolated(unsafe) static var profilingEnabled = false
     @inline(__always) private func lap(_ name: String, _ t0: CFAbsoluteTime) {
         guard Self.profilingEnabled else { return }
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000

@@ -97,8 +97,8 @@ public final class MatAnyoneCoreML {
 
     // ------------------------------------------------------------------- predict
     /// Per-model cumulative predict time (ms) and call count, for profiling. Off the hot path.
-    public static var profile: [String: (ms: Double, calls: Int)] = [:]
-    public static var profilingEnabled = false
+    nonisolated(unsafe) public static var profile: [String: (ms: Double, calls: Int)] = [:]
+    nonisolated(unsafe) public static var profilingEnabled = false
 
     /// Low-level: run a model on raw `MLFeatureValue`s and return the provider. Lets the caller pass
     /// pass-through `MLMultiArray`s (e.g. encoder feature maps straight into the decoder) without
@@ -143,7 +143,7 @@ public final class MatAnyoneCoreML {
         return m
     }
 
-    public static var slowReads = 0
+    nonisolated(unsafe) public static var slowReads = 0
     public static func readMultiArray(_ m: MLMultiArray) -> MatAnyoneCoreML.Tensor {
         let shape = m.shape.map { $0.intValue }
         let n = shape.reduce(1, *)

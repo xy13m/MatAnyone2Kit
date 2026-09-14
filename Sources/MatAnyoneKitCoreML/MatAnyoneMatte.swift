@@ -41,15 +41,15 @@ public final class MatAnyoneMatte {
 
     /// Verbose per-frame diagnostics to Console (subsystem `com.elsewhere.matanyonekit`, category
     /// `matte`). Useful while bringing a device path up; set to `false` for steady-state.
-    public static var diagnostics = false
+    nonisolated(unsafe) public static var diagnostics = false
 
     /// Per-model compute placement. Everything conv-heavy runs on the ANE — the win a pure-GPU path
     /// couldn't get. `readout`/`maskencoder` were made ANE-eligible by re-export (CAResBlock ECA
     /// rank-4 rewrite, SDPA decomposition, static slices). The `object_summarizer` (rank-5 / matmul
     /// / reduce) that broke `maskencoder`'s ANE compile is its own `objsummary` model, pinned to the
     /// GPU and run only on memory frames so the conv-only `maskencoder` hits the ANE every frame.
-    public static var defaultUnit: MLComputeUnits = .cpuAndNeuralEngine
-    public static var unitOverrides: [String: MLComputeUnits] = [
+    nonisolated(unsafe) public static var defaultUnit: MLComputeUnits = .cpuAndNeuralEngine
+    nonisolated(unsafe) public static var unitOverrides: [String: MLComputeUnits] = [
         "objsummary": .cpuAndGPU,
     ]
 
