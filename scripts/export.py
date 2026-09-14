@@ -145,8 +145,22 @@ patch_ane_hostile_ops()
 patch_eca_rank4()
 
 REPO = "PeiqingYang/MatAnyone2"
-EVAL_CFG = "/tmp/matanyone2/matanyone2/config/eval_matanyone_config.yaml"
-H, W = 512, 288
+EVAL_CFG = os.environ.get("MA2_EVAL_CFG",
+                          "/tmp/matanyone2/matanyone2/config/eval_matanyone_config.yaml")
+# Working resolution. The bundled models are portrait 288x512; a landscape
+# export (e.g. MA2_WORKING_W=512 MA2_WORKING_H=288) only changes these two
+# values and the stride-16 feature grid derived from them below.
+H = int(os.environ.get("MA2_WORKING_H", "512"))
+W = int(os.environ.get("MA2_WORKING_W", "288"))
+if H % 16 or W % 16 or H <= 0 or W <= 0:
+    raise SystemExit("MA2_WORKING_H and MA2_WORKING_W must be positive multiples of 16")
+
+# pixel_fusion upsamples to sensory.shape[-2:], a two-element tensor that
+# Core ML Tools 9 cannot lower through aten::Int. Fix the stride-16 grid size
+# at trace time instead.
+_rebind(MatAnyone2, "pixel_fusion", [
+    ("size=sensory.shape[-2:]", f"size=({H // 16}, {W // 16})"),
+])
 OUT_DIR = os.path.join(os.path.dirname(__file__), "models")
 COMPUTE_UNITS = ct.ComputeUnit.CPU_AND_NE
 DEPLOY_TARGET = ct.target.iOS18
@@ -174,6 +188,17 @@ def to_inputs(names, tensors):
 
 
 def convert_save(name, wrapper, in_names, tensors, out_names):
+    path = os.path.join(OUT_DIR, f"{name}.mlpackage")
+    if os.path.exists(path):
+        # Lets an interrupted export resume without reconverting finished models.
+        print(f"  reusing {name}.mlpackage")
+        return {
+            "name": name,
+            "path": f"models/{name}.mlpackage",
+            "inputs": [{"name": n, "shape": list(t.shape)} for n, t in zip(in_names, tensors)],
+            "outputs": out_names,
+            "median_ms_mac_ane": 0.0,
+        }
     wrapper = wrapper.eval()
     with torch.inference_mode(), decomposed_sdpa():
         traced = torch.jit.trace(wrapper, tensors)
