@@ -75,6 +75,19 @@ public final class MatAnyoneCoreMLEngine {
     }
 
     // ------------------------------------------------------------------- public
+    /// Forgets everything learned since the last seed while keeping the six loaded models.
+    /// The feature-grid dimensions stay known, so the next call can be `seed(image:seedMask:)`
+    /// without re-running model specialization.
+    public func reset() {
+        memory.clearTemp()
+        currTi = -1
+        lastMemTi = 0
+        lastMask = nil
+        lastPixFeat = nil
+        lastMskValue = nil
+        sensory = nil
+    }
+
     /// image: [1,3,H,W] RGB in [0,1]. seedMask: [H*W] in [0,1]. Returns refined alpha [H*W].
     @discardableResult
     public func seed(image: Tensor, seedMask: [Float], warmup: Int = 10) throws -> [Float] {
@@ -108,7 +121,8 @@ public final class MatAnyoneCoreMLEngine {
         let pixFeat = try mv(enc, "pix_feat")
         let key = try tensor(enc, "key"), shrinkage = try tensor(enc, "shrinkage")
         let selection = try tensor(enc, "selection")
-        if h == 0 { h = pixFeat.shape[2].intValue; w = pixFeat.shape[3].intValue; initSensoryIfNeeded() }
+        if h == 0 { h = pixFeat.shape[2].intValue; w = pixFeat.shape[3].intValue }
+        initSensoryIfNeeded()                                  // first encode, or after reset()
 
         // --- segment
         var alpha: [Float]?
