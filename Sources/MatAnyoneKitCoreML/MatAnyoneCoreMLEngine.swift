@@ -103,6 +103,14 @@ public final class MatAnyoneCoreMLEngine {
     @discardableResult
     public func step(image: Tensor) throws -> [Float] { try step(image, seedMask: nil)! }
 
+    /// Adds `image` with a known `mask` [H*W] to the working memory without
+    /// touching the seed frame, which stays permanent. Use it after `seed`
+    /// to hand the tracker a second view, for example the props alone on the
+    /// seed frame and the person plus props on the current frame.
+    public func addMemoryFrame(image: Tensor, mask: [Float]) throws {
+        _ = try step(image, seedMask: mask)
+    }
+
     // ------------------------------------------------------------------- step
     @discardableResult
     func step(_ image: Tensor, seedMask: [Float]? = nil,
