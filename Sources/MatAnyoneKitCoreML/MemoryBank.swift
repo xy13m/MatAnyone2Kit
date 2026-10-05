@@ -77,16 +77,22 @@ final class MemoryBank {
         }
     }
 
-    /// Append `addCols` columns to a row-major `[rows, oldCols]` store → `[rows, oldCols+addCols]`.
+    /// Append `addCols` columns to a row-major `[rows, oldCols]` store → `[rows, oldCols+addCols]`,
+    /// one row copy at a time.
     private func appendTokens(into store: inout [Float], src: [Float], rows: Int, addCols: Int) {
         let oldCols = rows == 0 ? 0 : (store.count / rows)
         let newCols = oldCols + addCols
-        var out = [Float](repeating: 0, count: rows * newCols)
-        for r in 0..<rows {
-            for c in 0..<oldCols { out[r * newCols + c] = store[r * oldCols + c] }
-            for c in 0..<addCols { out[r * newCols + oldCols + c] = src[r * addCols + c] }
+        store = [Float](unsafeUninitializedCapacity: rows * newCols) { out, count in
+            store.withUnsafeBufferPointer { old in
+            src.withUnsafeBufferPointer { add in
+                for r in 0..<rows {
+                    let dst = out.baseAddress! + r * newCols
+                    if oldCols > 0 { dst.update(from: old.baseAddress! + r * oldCols, count: oldCols) }
+                    (dst + oldCols).update(from: add.baseAddress! + r * addCols, count: addCols)
+                }
+            }}
+            count = rows * newCols
         }
-        store = out
     }
 
     /// Keep the permanent prefix + the most recent `maxWorkTokens` temporary tokens.
@@ -96,13 +102,17 @@ final class MemoryBank {
         let keepStart = n - maxWorkTokens
         let keptCols = permEnd + (n - keepStart)
         func sieve(_ store: [Float], rows: Int) -> [Float] {
-            var out = [Float](repeating: 0, count: rows * keptCols)
-            for r in 0..<rows {
-                var dst = r * keptCols
-                for c in 0..<permEnd { out[dst] = store[r * n + c]; dst += 1 }
-                for c in keepStart..<n { out[dst] = store[r * n + c]; dst += 1 }
+            [Float](unsafeUninitializedCapacity: rows * keptCols) { out, count in
+                store.withUnsafeBufferPointer { src in
+                    for r in 0..<rows {
+                        let dst = out.baseAddress! + r * keptCols
+                        let row = src.baseAddress! + r * n
+                        dst.update(from: row, count: permEnd)
+                        (dst + permEnd).update(from: row + keepStart, count: n - keepStart)
+                    }
+                }
+                count = rows * keptCols
             }
-            return out
         }
         key = sieve(key, rows: keyDim)
         shrinkage = sieve(shrinkage, rows: 1)
