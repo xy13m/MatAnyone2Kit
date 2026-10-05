@@ -179,8 +179,7 @@ public final class MatAnyoneCoreMLEngine {
         if currTi == 0 {
             visual = lastMsk                                   // first frame: no uncertainty blend
         } else {
-            let affinity = memory.matchMemory(queryKey: key.data, querySelection: selection.data)
-            let readout = memory.readoutValue(affinity)        // [CV, hw]
+            let readout = memory.readout(queryKey: key.data, querySelection: selection.data)  // [CV, hw]
             var diff = [Float](repeating: 0, count: readout.count)
             vDSP.subtract(readout, lastMsk, result: &diff)
             let prob = try tensor(try model.run("uncert", [
