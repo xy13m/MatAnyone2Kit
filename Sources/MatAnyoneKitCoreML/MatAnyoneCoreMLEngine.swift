@@ -51,6 +51,13 @@ public final class MatAnyoneCoreMLEngine {
     private var lastMskValue: [Float]?      // channel-first [CV, hw]
     private var sensory: MLMultiArray?      // [1,1,256,h,w] pass-through
 
+    // Float16 model inputs, created once and refilled each step. Every exported model takes
+    // Float16, so filling these directly skips a Float32 array plus Core ML's own conversion.
+    // Predictions are synchronous, so an input is never refilled while a model still reads it.
+    private var inputs: [String: MLMultiArray] = [:]
+    /// `lastMask` as a model input; filled when `lastMask` changes, read by up to four models.
+    private var lastMaskInput: MLFeatureValue?
+
     public init(model: MatAnyoneCoreML, memEvery: Int = 5, maxMemFrames: Int = 5, topK: Int = 30,
                 staggerUpdates: Int = 5, sensoryDim: Int = 256) {
         self.model = model
@@ -83,6 +90,7 @@ public final class MatAnyoneCoreMLEngine {
         currTi = -1
         lastMemTi = 0
         lastMask = nil
+        lastMaskInput = nil
         lastPixFeat = nil
         lastMskValue = nil
         sensory = nil
@@ -125,7 +133,8 @@ public final class MatAnyoneCoreMLEngine {
         }
 
         // --- encode (feature maps f16..f1 + pix_feat stay as MLMultiArray pass-through)
-        let enc = try model.run("encoder", ["image": try MatAnyoneCoreML.value(image)])
+        let imageFV = try fv(image.data, image.shape, slot: "image")   // shared with maskencoder
+        let enc = try model.run("encoder", ["image": imageFV])
         let pixFeat = try mv(enc, "pix_feat")
         let key = try tensor(enc, "key"), shrinkage = try tensor(enc, "shrinkage")
         let selection = try tensor(enc, "selection")
@@ -141,13 +150,14 @@ public final class MatAnyoneCoreMLEngine {
         if let seedMask { alpha = seedMask }
 
         lastMask = alpha
+        lastMaskInput = try fv(try need(alpha, "alpha"), [1, 1, H, W], slot: "last_mask")
         lastPixFeat = pixFeat
 
         // --- memory write (mask_value identical regardless of deep_update; commit only on mem frames)
         if firstFramePred { memory.clearTemp() }
-        let masksFV = try fv(try need(lastMask, "lastMask"), [1, 1, H, W])
+        let masksFV = try need(lastMaskInput, "lastMaskInput")
         let me = try model.run("maskencoder", [
-            "image": try MatAnyoneCoreML.value(image),
+            "image": imageFV,
             "pix_feat": MLFeatureValue(multiArray: pixFeat),
             "sensory": MLFeatureValue(multiArray: try need(sensory, "sensory")),
             "masks": masksFV,
@@ -185,18 +195,19 @@ public final class MatAnyoneCoreMLEngine {
             let prob = try tensor(try model.run("uncert", [
                 "last_pix_feat": MLFeatureValue(multiArray: try need(lastPixFeat, "lastPixFeat")),
                 "cur_pix_feat": MLFeatureValue(multiArray: pixFeat),
-                "last_mask": try fv(try need(lastMask, "lastMask"), [1, 1, H, W]),
-                "mem_val_diff": try fv(diff, [1, sensoryDim, h, w]),
+                "last_mask": try need(lastMaskInput, "lastMaskInput"),
+                "mem_val_diff": try fv(diff, [1, sensoryDim, h, w], slot: "mem_val_diff"),
             ]), "prob")                                        // [1,1,h,w] -> per-pixel
             visual = blend(readout: readout, last: lastMsk, prob: prob.data)
         }
 
         let ro = try model.run("readout", [
             "pix_feat": MLFeatureValue(multiArray: pixFeat),
-            "pixel": try fv(visual, [1, 1, sensoryDim, h, w]),
+            "pixel": try fv(visual, [1, 1, sensoryDim, h, w], slot: "pixel"),
             "sensory": MLFeatureValue(multiArray: try need(sensory, "sensory")),
-            "last_mask": try fv(try need(lastMask, "lastMask"), [1, 1, H, W]),
-            "obj_memory": try fv(try need(memory.objV, "memory.objV"), [1, 1, 1, 16, sensoryDim + 1]),
+            "last_mask": try need(lastMaskInput, "lastMaskInput"),
+            "obj_memory": try fv(try need(memory.objV, "memory.objV"), [1, 1, 1, 16, sensoryDim + 1],
+                                 slot: "obj_memory"),
         ])
 
         let dec = try model.run("decoder", [
@@ -225,9 +236,21 @@ public final class MatAnyoneCoreMLEngine {
     private func mfv(_ p: MLFeatureProvider, _ key: String) throws -> MLFeatureValue {
         MLFeatureValue(multiArray: try out(p, key))
     }
-    /// Wrap a Swift `[Float]` + shape as an input feature value.
-    private func fv(_ data: [Float], _ shape: [Int]) throws -> MLFeatureValue {
-        try MatAnyoneCoreML.value(Tensor(data: data, shape: shape))
+    /// Convert a Swift `[Float]` into the reusable Float16 input `slot` and wrap it as a feature
+    /// value. The slot is overwritten by the next call with the same name.
+    private func fv(_ data: [Float], _ shape: [Int], slot: String) throws -> MLFeatureValue {
+        let m: MLMultiArray
+        if let existing = inputs[slot], existing.shape.map(\.intValue) == shape {
+            m = existing
+        } else {
+            m = try MatAnyoneCoreML.makeFloat16MultiArray(shape: shape)
+            inputs[slot] = m
+        }
+        guard data.count == m.count else {
+            throw EngineError(message: "input '\(slot)' has \(data.count) values for shape \(shape)")
+        }
+        MatAnyoneCoreML.write(data, into: m)
+        return MLFeatureValue(multiArray: m)
     }
 
     private func initSensoryIfNeeded() {

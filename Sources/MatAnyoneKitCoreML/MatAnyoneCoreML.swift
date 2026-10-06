@@ -143,6 +143,64 @@ public final class MatAnyoneCoreML {
         return m
     }
 
+    /// An empty Float16 `MLMultiArray`, the input type every exported model declares. Fill it
+    /// with `write(_:into:)`; Core ML then takes it as is instead of converting from Float32.
+    public static func makeFloat16MultiArray(shape: [Int]) throws -> MLMultiArray {
+        try MLMultiArray(shape: shape.map { NSNumber(value: $0) }, dataType: .float16)
+    }
+
+    /// Converts `data` (row-major, one value per element of `m`) into the Float16 array `m`,
+    /// honouring its strides. Do not call it while a prediction that reads `m` is running.
+    public static func write(_ data: [Float], into m: MLMultiArray) {
+        let shape = m.shape.map { $0.intValue }
+        let strides = m.strides.map { $0.intValue }
+        precondition(m.dataType == .float16, "write(_:into:) needs a Float16 MLMultiArray")
+        precondition(data.count == shape.reduce(1, *), "data count \(data.count) != shape \(shape)")
+        let runs = ContiguousRuns(shape: shape, strides: strides)
+        data.withUnsafeBufferPointer { src in
+            runs.forEach { dstOff, srcOff, len in
+                var s = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: src.baseAddress! + srcOff),
+                                      height: 1, width: vImagePixelCount(len), rowBytes: len * 4)
+                var d = vImage_Buffer(data: m.dataPointer.advanced(by: dstOff * 2),
+                                      height: 1, width: vImagePixelCount(len), rowBytes: len * 2)
+                vImageConvert_PlanarFtoPlanar16F(&s, &d, vImage_Flags(kvImageDoNotTile))
+            }
+        }
+    }
+
+    /// Splits a strided array into the runs that are contiguous in both the array's storage and
+    /// the packed row-major order: `forEach` hands out (storage offset, packed offset, length).
+    struct ContiguousRuns {
+        let shape: [Int]
+        let strides: [Int]
+        let inner: Int          // elements per run
+        let outerDims: Int      // dims [0, outerDims) are walked one run at a time
+
+        init(shape: [Int], strides: [Int]) {
+            self.shape = shape; self.strides = strides
+            var inner = 1, d = shape.count - 1
+            while d >= 0 && strides[d] == inner { inner *= shape[d]; d -= 1 }
+            self.inner = inner
+            self.outerDims = d + 1
+        }
+
+        func forEach(_ body: (_ storageOff: Int, _ packedOff: Int, _ count: Int) -> Void) {
+            let n = shape.reduce(1, *)
+            if outerDims == 0 { body(0, 0, n); return }
+            guard inner > 0 else { return }
+            var idx = [Int](repeating: 0, count: outerDims)
+            var packed = 0
+            for _ in 0..<(n / inner) {
+                var off = 0
+                for dim in 0..<outerDims { off += idx[dim] * strides[dim] }
+                body(off, packed, inner)
+                packed += inner
+                var dim = outerDims - 1
+                while dim >= 0 { idx[dim] += 1; if idx[dim] < shape[dim] { break }; idx[dim] = 0; dim -= 1 }
+            }
+        }
+    }
+
     nonisolated(unsafe) public static var slowReads = 0
     public static func readMultiArray(_ m: MLMultiArray) -> MatAnyoneCoreML.Tensor {
         let shape = m.shape.map { $0.intValue }
