@@ -24,6 +24,7 @@ final class MemoryBank {
     private var shrinkage: [Float] = []
     private var valueT: [Float] = []
     private var n = 0
+    var isEmpty: Bool { n == 0 }
     private var permEnd = 0
 
     // Object memory running sum [Q, embedDim+1] and sensory [h, w, sensoryDim] (NHWC).
@@ -87,8 +88,8 @@ final class MemoryBank {
             src.withUnsafeBufferPointer { add in
                 for r in 0..<rows {
                     let dst = out.baseAddress! + r * newCols
-                    if oldCols > 0 { dst.update(from: old.baseAddress! + r * oldCols, count: oldCols) }
-                    (dst + oldCols).update(from: add.baseAddress! + r * addCols, count: addCols)
+                    if oldCols > 0 { dst.initialize(from: old.baseAddress! + r * oldCols, count: oldCols) }
+                    (dst + oldCols).initialize(from: add.baseAddress! + r * addCols, count: addCols)
                 }
             }}
             count = rows * newCols
@@ -107,8 +108,8 @@ final class MemoryBank {
                     for r in 0..<rows {
                         let dst = out.baseAddress! + r * keptCols
                         let row = src.baseAddress! + r * n
-                        dst.update(from: row, count: permEnd)
-                        (dst + permEnd).update(from: row + keepStart, count: n - keepStart)
+                        dst.initialize(from: row, count: permEnd)
+                        (dst + permEnd).initialize(from: row + keepStart, count: n - keepStart)
                     }
                 }
                 count = rows * keptCols

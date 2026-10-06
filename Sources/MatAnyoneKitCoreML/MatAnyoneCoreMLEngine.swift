@@ -11,7 +11,7 @@ import Foundation
 ///     seed(frame0, seedMask)   // memorize seed, predict, warm up on the static first frame
 ///     step(frame_t)            // realtime frames
 ///
-/// Spatial tensors are PyTorch-layout NCHW; memory tokens are channel-first `[C, N]`.
+/// Spatial tensors are PyTorch-layout NCHW; memory keys are channel-first `[C, N]`, memory values token-major `[N, C]`.
 public final class MatAnyoneCoreMLEngine {
     public typealias Tensor = MatAnyoneCoreML.Tensor
 
@@ -46,7 +46,6 @@ public final class MatAnyoneCoreMLEngine {
 
     private var currTi = -1
     private var lastMemTi = 0
-    private var lastMask: [Float]?          // full-res alpha, [H*W] (Swift touches it -> [Float])
     private var lastPixFeat: MLMultiArray?  // [1,256,h,w] pass-through (never inspected in Swift)
     private var lastMskValue: [Float]?      // channel-first [CV, hw]
     private var sensory: MLMultiArray?      // [1,1,256,h,w] pass-through
@@ -55,7 +54,7 @@ public final class MatAnyoneCoreMLEngine {
     // Float16, so filling these directly skips a Float32 array plus Core ML's own conversion.
     // Predictions are synchronous, so an input is never refilled while a model still reads it.
     private var inputs: [String: MLMultiArray] = [:]
-    /// `lastMask` as a model input; filled when `lastMask` changes, read by up to four models.
+    /// The last alpha as a model input; filled when it changes, read by up to four models.
     private var lastMaskInput: MLFeatureValue?
 
     public init(model: MatAnyoneCoreML, memEvery: Int = 5, maxMemFrames: Int = 5, topK: Int = 30,
@@ -89,7 +88,6 @@ public final class MatAnyoneCoreMLEngine {
         memory.clearTemp()
         currTi = -1
         lastMemTi = 0
-        lastMask = nil
         lastMaskInput = nil
         lastPixFeat = nil
         lastMskValue = nil
@@ -149,7 +147,6 @@ public final class MatAnyoneCoreMLEngine {
         }
         if let seedMask { alpha = seedMask }
 
-        lastMask = alpha
         lastMaskInput = try fv(try need(alpha, "alpha"), [1, 1, H, W], slot: "last_mask")
         lastPixFeat = pixFeat
 
@@ -189,6 +186,9 @@ public final class MatAnyoneCoreMLEngine {
         if currTi == 0 {
             visual = lastMsk                                   // first frame: no uncertainty blend
         } else {
+            // An empty bank (a seed that failed after clearing it) would make
+            // BLAS abort the process; fail the step instead.
+            guard !memory.isEmpty else { throw EngineError(message: "memory is empty; seed again") }
             let readout = memory.readout(queryKey: key.data, querySelection: selection.data)  // [CV, hw]
             var diff = [Float](repeating: 0, count: readout.count)
             vDSP.subtract(readout, lastMsk, result: &diff)

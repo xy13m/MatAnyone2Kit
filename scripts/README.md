@@ -76,8 +76,10 @@ graph and doesn't cost anything.
 
 The model time was only ~half the budget; the stateful glue had to keep up too:
 
-- **Parallelized `topKSoftmax`** across independent columns with `DispatchQueue.concurrentPerform`
-  (~11 ms → ~2.5 ms).
+- **Parallelized top-k** across independent pixels with `DispatchQueue.concurrentPerform`
+  (~11 ms → ~2.5 ms). The readout now sums only the top-k value rows per pixel, and the
+  similarity is one sgemm against cached memory-side terms (memory read ~2.6 ms → ~0.6 ms at
+  512x288 with a full bank).
 - **SIMD fp16 readback** — `MLMultiArray` fp16→fp32 via `vImageConvert_Planar16FtoPlanarF` plus bulk
   `memcpy` for contiguous trailing runs, instead of per-element `NSNumber` subscripting.
 - **Vectorized `blend`** with `vDSP_vsub`/`vDSP_vma`.
